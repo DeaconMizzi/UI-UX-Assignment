@@ -1,89 +1,122 @@
 import React, { useMemo, useState } from 'react';
 import { initialAlerts } from './alerts';
+import ConsoleHeader from './components/ConsoleHeader';
+import AlertSummary from './components/AlertSummary';
+import AlertFilters from './components/AlertFilters';
+import AlertList from './components/AlertList';
+import AlertDetails from './components/AlertDetails';
+import { comparePriority, sortAlerts } from './utils/alertHelpers';
 
-// This intentionally starts as one oversized component. It is a candidate exercise, not a reference architecture.
+// App is the single source of truth: changes here flow down to child components.
+const initialSelectedAlert = [...initialAlerts].sort(comparePriority)[0] ?? null;
+
 export default function App() {
+  // Local/mock data: refreshing the page resets all status changes.
   const [alerts, setAlerts] = useState(initialAlerts);
   const [search, setSearch] = useState('');
   const [severity, setSeverity] = useState('All');
   const [status, setStatus] = useState('All');
-  const [selectedId, setSelectedId] = useState(initialAlerts[0].id);
-  const [pendingAction, setPendingAction] = useState('Acknowledged');
+  const [sortBy, setSortBy] = useState('priority');
+
+  const [selectedId, setSelectedId] = useState(initialSelectedAlert?.id ?? null);
+  const [pendingAction, setPendingAction] = useState(initialSelectedAlert?.status ?? 'New');
   const [notice, setNotice] = useState('');
   const [showNotes, setShowNotes] = useState(false);
-  const selected = alerts.find(item => item.id === selectedId);
 
-  const filtered = useMemo(() => alerts.filter(alert => {
+  const selected = alerts.find(alert => alert.id === selectedId);
+
+  // Derived list: recompute only when alerts/search/filters/sorting change.
+  const filtered = useMemo(() => {
     const term = search.toLowerCase().trim();
-    return (severity === 'All' || alert.severity === severity)
-      && (status === 'All' || alert.status === status)
-      && (!term || [alert.id, alert.title, alert.asset, alert.user, alert.description].some(value => value.toLowerCase().includes(term)));
-  }), [alerts, search, severity, status]);
+    const matching = alerts.filter(alert => {
+      const matchesSeverity = severity === 'All' || alert.severity === severity;
+      const matchesStatus = status === 'All' || alert.status === status;
+      const matchesSearch = !term || [
+        alert.id, alert.title, alert.asset, alert.user, alert.description
+      ].some(value => String(value ?? '').toLowerCase().includes(term));
+      return matchesSeverity && matchesStatus && matchesSearch;
+    });
+    return sortAlerts(matching, sortBy);
+  }, [alerts, search, severity, status, sortBy]);
 
-  function applyAction() {
-    if (!selected) return;
-    setAlerts(current => current.map(item => item.id === selectedId ? { ...item, status: pendingAction } : item));
-    setNotice(`Update saved for ${selectedId}.`);
+  function selectAlert(alert) {
+    setSelectedId(alert.id);
+    setPendingAction(alert.status); // Prevent a prior alert's unsaved status carrying over.
+    setNotice('');
+    setShowNotes(false);
   }
 
-  function reset() {
-    setSearch(''); setSeverity('All'); setStatus('All');
+  function applyAction() {
+    if (!selected || pendingAction === selected.status) return;
+    const previousStatus = selected.status;
+
+    // Update only the matching alert; the summary/list/details all react to this.
+    setAlerts(current => current.map(alert =>
+      alert.id === selectedId ? { ...alert, status: pendingAction } : alert
+    ));
+    setNotice(`${selectedId} changed from ${previousStatus} to ${pendingAction}.`);
+  }
+
+  function resetFilters() {
+    setSearch('');
+    setSeverity('All');
+    setStatus('All');
+    setSortBy('priority');
+  }
+
+  function changePendingAction(value) {
+    setPendingAction(value);
+    setNotice('');
   }
 
   return (
     <div className="page">
-      <div className="topbar">
-        <div className="brand"><span className="brandbox">CS</span> CyberSift <small>Part of GO plc. Group · Operations</small></div>
-        <div className="toplinks">Overview &nbsp; / &nbsp; Events &nbsp; / &nbsp; Rules &nbsp; / &nbsp; Inventory &nbsp; / &nbsp; Settings</div>
-        <div className="user">Analyst ▾</div>
-      </div>
-      <div className="content">
-        <div className="breadcrumbs">Security / Operations / Alerts / Alert list / All alerts</div>
-        <div className="headline"><h1>Alert Management Console</h1><span>Environment: Production &nbsp; | &nbsp; Last reviewed: —</span></div>
-        <p className="intro">Use this page to review security event notifications, locate relevant items and maintain their investigation status.</p>
-        <div className="statline">
-          <div><b>{alerts.length}</b><small>TOTAL ALERTS</small></div>
-          <div><b>{alerts.filter(a => a.status === 'New').length}</b><small>NEW ITEMS</small></div>
-          <div><b>{alerts.filter(a => a.severity === 'Critical').length}</b><small>CRITICAL</small></div>
-          <div><b>{alerts.filter(a => a.status === 'Resolved').length}</b><small>RESOLVED</small></div>
+      <ConsoleHeader />
+
+      <main className="content">
+        <div className="headline">
+          <h1>Security alerts</h1>
+          <span>Environment: Demo &nbsp; | &nbsp; Local alert data</span>
         </div>
-        <div className="bar"><strong>Query and filtering options</strong><span>Use the controls below to narrow the displayed records.</span></div>
-        <div className="filters">
-          <label>Search records <input placeholder="Type a search term" value={search} onChange={e => setSearch(e.target.value)} /></label>
-          <label>Severity category <select value={severity} onChange={e => setSeverity(e.target.value)}>{['All', 'Critical', 'High', 'Medium', 'Low'].map(s => <option key={s}>{s}</option>)}</select></label>
-          <label>Investigation status <select value={status} onChange={e => setStatus(e.target.value)}>{['All', 'New', 'Acknowledged', 'Resolved', 'False Positive'].map(s => <option key={s}>{s}</option>)}</select></label>
-          <button className="reset" onClick={reset}>Clear selections</button>
+        <p className="intro">Review detections, investigate context and update alert status.</p>
+
+        <AlertSummary alerts={alerts} />
+
+        <AlertFilters
+          search={search}
+          severity={severity}
+          status={status}
+          sortBy={sortBy}
+          onSearchChange={setSearch}
+          onSeverityChange={setSeverity}
+          onStatusChange={setStatus}
+          onSortChange={setSortBy}
+          onReset={resetFilters}
+        />
+
+        <div className="workspace">
+          <AlertList
+            alerts={filtered}
+            selectedId={selectedId}
+            sortBy={sortBy}
+            onSelectAlert={selectAlert}
+            onClearFilters={resetFilters}
+          />
+          <AlertDetails
+            selected={selected}
+            pendingAction={pendingAction}
+            onPendingActionChange={changePendingAction}
+            onApplyAction={applyAction}
+            notice={notice}
+            showNotes={showNotes}
+            onToggleNotes={() => setShowNotes(current => !current)}
+          />
         </div>
-        <div className="tablebar"><b>Matching alert records</b><span>{filtered.length} records returned</span></div>
-        <div className="tablewrap"><table>
-          <thead><tr><th>Alert ID</th><th>Detection title</th><th>Severity</th><th>Event time (UTC)</th><th>Asset name</th><th>Current status</th><th>Detection source</th><th>More</th></tr></thead>
-          <tbody>{filtered.map(a => <tr key={a.id} className={a.id === selectedId ? 'active' : ''}>
-            <td>{a.id}</td><td>{a.title}</td><td><span className={'sev ' + a.severity.toLowerCase()}>{a.severity}</span></td>
-            <td>{new Date(a.timestamp).toLocaleString('en-GB', { timeZone: 'UTC' })}</td><td>{a.asset}</td><td>{a.status}</td><td>{a.source}</td>
-            <td><button className="tiny" onClick={() => { setSelectedId(a.id); setNotice(''); setShowNotes(false); }}>View</button></td>
-          </tr>)}</tbody>
-        </table>{filtered.length === 0 && <div className="empty">No matching records. Please modify the selected parameters and try again.</div>}</div>
-        <p className="footnote">Tip: click “View” to load an alert into the details section below. You may need to scroll.</p>
-        <div className="detailbar"><strong>Selected record details</strong><span>Investigation / Record inspector</span></div>
-        {selected ? <div className="details">
-          <div className="fieldgrid">
-            <div><small>IDENTIFIER</small><p>{selected.id}</p></div><div><small>DETECTION TITLE</small><p>{selected.title}</p></div><div><small>SEVERITY</small><p>{selected.severity}</p></div>
-            <div><small>CATEGORY</small><p>{selected.category}</p></div><div><small>ASSOCIATED USER</small><p>{selected.user}</p></div><div><small>ASSET</small><p>{selected.asset}</p></div>
-            <div><small>SOURCE IP</small><p>{selected.srcIp}</p></div><div><small>ORIGIN SYSTEM</small><p>{selected.source}</p></div><div><small>STATUS</small><p>{selected.status}</p></div>
-          </div>
-          <h3>Event description</h3><p>{selected.description}</p>
-          <button className="linkbutton" onClick={() => setShowNotes(v => !v)}>{showNotes ? 'Hide' : 'Show'} supporting notes</button>
-          {showNotes && <p className="notes">{selected.notes}</p>}
-          <div className="actionbox"><label>Change investigation status
-            <select value={pendingAction} onChange={e => setPendingAction(e.target.value)}>
-              {['Acknowledged', 'Resolved', 'False Positive', 'New'].map(s => <option key={s}>{s}</option>)}
-            </select></label>
-            <button onClick={applyAction}>Apply change to record</button>
-            <span className="notice">{notice}</span>
-          </div>
-        </div> : <div className="empty">Select an alert.</div>}
-        <footer>CyberSift · Part of GO plc. Group · Demo environment · All alerts and identities are fictional</footer>
-      </div>
+
+        <footer>
+          CyberSift · Part of GO plc. Group · Demo environment · All alerts and identities are fictional
+        </footer>
+      </main>
     </div>
   );
 }
